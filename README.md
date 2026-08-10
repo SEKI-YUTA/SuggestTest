@@ -11,21 +11,23 @@
 ## ✨ 特徴
 
 - **1秒デバウンス判定**: 入力のたびにタイマーをリセット。1秒無入力でのみ AI を呼び出し、推論中の追加入力は前回タスクをキャンセルして無駄を省きます。
-- **語彙をまるごと AI に読み込ませる**: 起動時に `tmp.txt` の全単語をシステムプロンプトへ埋め込み、毎回の判定で参照させます（LMStudio のプレフィックスキャッシュで高速）。
+- **語彙をまるごと AI に読み込ませる**: 起動時に `input/tmp.txt` の全単語をシステムプロンプトへ埋め込み、毎回の判定で参照させます（LMStudio のプレフィックスキャッシュで高速）。
 - **起動時にモデルを選択**: LMStudio の `/v1/models` API からロード済みモデル一覧を取得し、↑↓+Enter で選択。埋め込みモデルは自動除外。
 - **誤提案ガード**: カタカナ↔ひらがなを正規化した類似度判定で、無意味入力（`aaaa` など）へのデタラメ提案を防止。
 - **完全一致は高速パス**: 語彙と完全一致する正しい入力は AI を呼ばず「✔ 正解」。
 - **[Tab] で確定 / [Enter] で送信**: サジェストを Tab で入力欄に反映。
+- **📄 セッションログ**: Enter ごとに「入力＋サジェスト」を `output/{モデル名}-{時刻}.txt` に自動記録。
+- **🧪 自動テスト**: `test-settings.yml` からモデル・入力ファイルを読み込み、一括推論して同じ形式で出力（`run_test.py`）。
 
 ## 🧰 動作環境
 
 - **Python 3.10+**
 - **[LMStudio](https://lmstudio.ai/)** でローカル LLM サーバーを起動（既定: `http://localhost:1234/v1`）
 - Python パッケージ（すべてインストール済みの前提）:
-  - `openai`, `httpx`, `requests`, `prompt_toolkit`, `rich`
+  - `openai`, `httpx`, `requests`, `prompt_toolkit`, `rich`, `pyyaml`
   - `difflib`（標準ライブラリ）
 
-> 新規環境で導入する場合: `pip install openai httpx requests prompt_toolkit rich`
+> 新規環境で導入する場合: `pip install openai httpx requests prompt_toolkit rich pyyaml`
 
 ## 🚀 セットアップ
 
@@ -33,10 +35,10 @@
 LMStudio を起動し、モデル（例: `gemma-2-2b-it`）をダウンロード＆ロード → **Developer / Server** タブで **Start Server** を押します。
 
 ### 2. テスト用語彙ファイルを準備
-判定のベースになる正しい単語リストを `tmp.txt` に作成します。`words.txt`（5970語のヘアサロン検索語彙）から先頭 N 語を切り出せます。
+判定のベースになる正しい単語リストを `input/tmp.txt` に作成します。`input/words.txt`（5970語のヘアサロン検索語彙）から先頭 N 語を切り出せます。
 
 ```bash
-python extract_words.py 200      # 先頭200語を tmp.txt へ
+python extract_words.py 200      # 先頭200語を input/tmp.txt へ
 ```
 
 > Gemma2 2b（コンテキスト約8k）では **数〜数百語** が無難です。語数は `tui_app.py --check` で確認できます。
@@ -73,15 +75,58 @@ python tui_app.py --once "カッt"
 python tui_app.py --check
 ```
 
+## 📄 セッションログ（対話モード）
+
+対話モードでは **Enter を押したタイミング**で、その入力テキストとサジェストをファイルに追記します。
+1セッション = 1ファイルで、ファイル名は `output/{モデル名}-{タイムスタンプ}.txt`（モデル名の `/` は `-` に置換）。
+
+```text
+# model: gemma-2-2b-it
+# mode: interactive
+# timestamp: 2026-08-10 23:42:14
+# columns: input<TAB>suggestion  (サジェスト無しは (なし))
+
+カッt	カット
+aaaa	(なし)
+```
+
+- 出力先は `--output-dir`（既定 `output/`）で変更可能。
+- デバウンスが未完のまま Enter した場合も、同期的に判定してログが欠けないようにしています。
+
+## 🧪 自動テスト（一括推論）
+
+`test-settings.yml` で指定したモデルと入力ファイルを使い、**入力ファイルを1行ずつ推論して結果をファイルに出力**します。出力形式はセッションログと同一です。
+
+```bash
+python run_test.py                     # 既定の test-settings.yml を使用
+python run_test.py --config other.yml  # 設定ファイルを指定
+```
+
+### test-settings.yml
+
+```yaml
+# 必須
+model: gemma-2-2b-it                  # テストに使用するモデル名
+input_file: input/test-inputs.txt     # 1行1単語の入力ファイル
+# 任意（省略時は既定値）
+words_file: input/tmp.txt
+base_url: http://localhost:1234/v1
+output_dir: output
+```
+
+- 必須項目（`model`, `input_file`）が不足している場合は、不足している項目名を出力して終了します。
+- 入力ファイルは `input/test-inputs.txt`（サンプル同梱）を書き換えて使います。
+
 ## ⚙️ 設定
 
 ### CLI オプション
 | オプション | 既定値 | 説明 |
 |---|---|---|
-| `--words` | `tmp.txt` | 読み込む語彙ファイル |
+| `--words` | `input/tmp.txt` | 読み込む語彙ファイル |
 | `--model` | *(対話選択)* | LMStudio のモデルID。省略時は起動時に一覧から選択 |
 | `--base-url` | `http://localhost:1234/v1` | LMStudio の API URL |
 | `--debounce` | `1.0` | 無入力判定までの秒数 |
+| `--output-dir` | `output` | セッションログの出力ディレクトリ |
 | `--check` | — | 起動診断のみ行い終了 |
 | `--once INPUT` | — | 1回だけ判定して終了（非対話） |
 
@@ -129,12 +174,18 @@ python tui_app.py --check
 
 ```
 WordReCorrectWithAI/
-├── words.txt          # ヘアサロン検索語彙 5970語（マスタ）
-├── extract_words.py   # words.txt の先頭N語を tmp.txt へ書き出す
-├── tmp.txt            # テスト用語彙（extract_words.py でサイズ調整）
-├── ai_checker.py      # AI 判定ロジック（プロンプト構築・出力解析・類似度ガード）
-├── tui_app.py         # TUI 本体（デバウンス・サジェスト表示・モデル選択）
-└── README.md          # このファイル
+├── input/                # 入力ファイル類
+│   ├── words.txt         # ヘアサロン検索語彙 5970語（マスタ）
+│   ├── tmp.txt           # テスト用語彙（extract_words.py でサイズ調整）
+│   └── test-inputs.txt   # 自動テスト用サンプル入力（1行1単語）
+├── extract_words.py      # input/words.txt の先頭N語を input/tmp.txt へ書き出す
+├── ai_checker.py         # AI 判定ロジック（プロンプト構築・出力解析・類似度ガード）
+├── session_log.py        # ログ出力の共通処理（パス生成・ヘッダ・エントリ追記）
+├── tui_app.py            # TUI 本体（デバウンス・サジェスト表示・モデル選択・セッションログ）
+├── run_test.py           # 自動テスト（test-settings.yml ベースの一括推論）
+├── test-settings.yml     # 自動テスト設定（モデル・入力ファイル 等）
+├── output/               # ログ出力先（実行時に自動生成、.gitignore 対象）
+└── README.md             # このファイル
 ```
 
 ## 📝 制限事項・チューニング

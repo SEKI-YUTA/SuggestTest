@@ -1,0 +1,4 @@
+# 生成物
+output/
+__pycache__/
+*.pyc

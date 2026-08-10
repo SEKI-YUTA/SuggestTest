@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-words.txt から先頭 n 単語を抜き出して tmp.txt に保存するスクリプト。
+input/words.txt から先頭 n 単語を抜き出して input/tmp.txt に保存するスクリプト。
 
 使い方:
     python extract_words.py N [INPUT] [OUTPUT]
 
 引数:
     N        : 抜き出す先頭からの単語数（必須・正の整数）
-    INPUT    : 入力ファイル（省略時はスクリプトと同じフォルダの words.txt）
-    OUTPUT   : 出力ファイル（省略時は tmp.txt）
+    INPUT    : 入力ファイル（省略時は input/words.txt）
+    OUTPUT   : 出力ファイル（省略時は input/tmp.txt）
 
 例:
-    python extract_words.py 100            # 先頭100語を tmp.txt へ
-    python extract_words.py 500            # 先頭500語を tmp.txt へ
-    python extract_words.py 100 words.txt my_words.txt
+    python extract_words.py 100            # 先頭100語を input/tmp.txt へ
+    python extract_words.py 500            # 先頭500語を input/tmp.txt へ
+    python extract_words.py 100 input/words.txt input/tmp.txt
 """
 
 import os
@@ -48,10 +48,10 @@ def main() -> int:
         sys.stderr.write(f"エラー: N は 1 以上の整数で指定してください（入力値: {n}）。\n")
         return 1
 
-    # デフォルトの入出力ファイルは「スクリプトと同じフォルダ」に解決
+    # デフォルトの入出力ファイルは「スクリプトと同じフォルダの input/」に解決
     here = os.path.dirname(os.path.abspath(__file__))
-    input_path = sys.argv[2] if len(sys.argv) >= 3 else os.path.join(here, "words.txt")
-    output_path = sys.argv[3] if len(sys.argv) >= 4 else os.path.join(here, "tmp.txt")
+    input_path = sys.argv[2] if len(sys.argv) >= 3 else os.path.join(here, "input", "words.txt")
+    output_path = sys.argv[3] if len(sys.argv) >= 4 else os.path.join(here, "input", "tmp.txt")
 
     # --- 入力ファイルの読み込み --------------------------------------------
     if not os.path.isfile(input_path):
@@ -75,7 +75,7 @@ def main() -> int:
     selected = words[:n]
 
     # --- tmp.txt へ出力 ----------------------------------------------------
-    # newline="\n" で LF 改行を強制（words.txt と同じ LF に揃える）
+    # newline="\n" で LF 改行を強制（input/words.txt と同じ LF に揃える）
     with open(output_path, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(selected))
         f.write("\n")  # 末尾に改行

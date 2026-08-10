@@ -3,7 +3,7 @@
 タイポサジェスト TUI アプリ（LMStudio / Gemma2 2b）
 
 使い方:
-    # 1) 事前にテストサイズの語彙を用意（先頭N語を tmp.txt へ）
+    # 1) 事前にテストサイズの語彙を用意（先頭N語を input/tmp.txt へ）
     python extract_words.py 200
 
     # 2) LMStudio の Server で Gemma2 2b をロード後、起動
@@ -40,6 +40,7 @@ except Exception:  # 非 Windows 環境など
     _NoConsoleError = ()
 
 from ai_checker import build_system_prompt, judge_typo
+from session_log import make_output_path, write_header, append_entry
 
 # 標準出力・エラー出力を UTF-8 に固定（Windows コンソールの文字化け防止）
 for _stream in (sys.stdout, sys.stderr):
@@ -49,10 +50,13 @@ for _stream in (sys.stdout, sys.stderr):
         except (ValueError, OSError):
             pass
 
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
 DEFAULT_BASE_URL = os.environ.get("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
 DEFAULT_MODEL = os.environ.get("LMSTUDIO_MODEL", "gemma-2-2b-it")
-DEFAULT_WORDS = "tmp.txt"
+DEFAULT_WORDS = "input/tmp.txt"
 DEFAULT_DEBOUNCE = 1.0
+DEFAULT_OUTPUT_DIR = "output"
 
 STYLE = Style.from_dict({
     "prompt": "fg:ansicyan bold",
@@ -66,6 +70,13 @@ STYLE = Style.from_dict({
 def load_words(path: str) -> list[str]:
     with open(path, encoding="utf-8") as f:
         return [w.strip() for w in f if w.strip()]
+
+
+def data_path(path: str) -> str:
+    """相対パスはプロジェクトルート基準で解決（絶対パスはそのまま）。"""
+    if os.path.isabs(path):
+        return path
+    return os.path.join(PROJECT_ROOT, path)
 
 
 def list_models(base_url: str, timeout: float = 5.0) -> list[str]:
@@ -143,12 +154,15 @@ class TypoSuggest:
 
     def __init__(self, args: argparse.Namespace):
         self.args = args
-        self.words = load_words(args.words)
+        self.words = load_words(data_path(args.words))
         self.vocab = set(self.words)
         self.system_prompt = build_system_prompt(self.words)
         self.client = AsyncOpenAI(base_url=args.base_url, api_key="lm-studio", timeout=30.0)
         self.model = args.model
         self.debounce = args.debounce
+        self.output_dir = getattr(args, "output_dir", DEFAULT_OUTPUT_DIR)
+        self.session_path: str | None = None
+        self._judged_text: str | None = None  # 現在のサジェストが対応する入力テキスト
 
         self.current_suggestion: str | None = None
         self.status = "入力してください（1秒で判定します）"
@@ -200,6 +214,7 @@ class TypoSuggest:
             self._task.cancel()
         text = self.session.default_buffer.text
         self.current_suggestion = None
+        self._judged_text = None
         self.status = "入力中…" if text else "入力してください（1秒で判定します）"
         self._invalidate()
         try:
@@ -226,6 +241,7 @@ class TypoSuggest:
         text = captured.strip()
         if not text:
             self.current_suggestion = None
+            self._judged_text = captured
             self.status = "入力してください（1秒で判定します）"
             self._invalidate()
             return
@@ -233,6 +249,7 @@ class TypoSuggest:
         # 高速パス: 完全一致なら正解
         if text in self.vocab:
             self.current_suggestion = None
+            self._judged_text = captured
             self.status = "✔ 正解（語彙に一致）"
             self._invalidate()
             return
@@ -251,6 +268,7 @@ class TypoSuggest:
         except Exception as e:
             self.status = f"AIエラー: {self._short(e)}"
             self.current_suggestion = None
+            suggestion = None
         else:
             if suggestion:
                 self.current_suggestion = suggestion
@@ -258,6 +276,7 @@ class TypoSuggest:
             else:
                 self.current_suggestion = None
                 self.status = "タイポの可能性は低そうです（OK）"
+        self._judged_text = captured  # この入力の判定が確定
         self._invalidate()
 
     @staticmethod
@@ -269,6 +288,11 @@ class TypoSuggest:
     # メインループ
     # ------------------------------------------------------------------
     async def run(self) -> None:
+        # セッションログを準備（1セッション = 1ファイル）
+        self.session_path = make_output_path(self.model, self.output_dir)
+        write_header(self.session_path, self.model, "interactive")
+        print(f"📄 セッションログ: {self.session_path}")
+
         while True:
             try:
                 result = await self.session.prompt_async(
@@ -281,7 +305,27 @@ class TypoSuggest:
                 print()
                 break
 
+            text = result.strip()
             suggestion = self.current_suggestion
+            # デバウンスが未完（素早く Enter した等）なら同期的に判定し、ログを完全にする
+            if text and self._judged_text != result:
+                if text in self.vocab:
+                    suggestion = None
+                else:
+                    try:
+                        suggestion = await judge_typo(
+                            self.client, self.model, text,
+                            self.system_prompt, self.vocab, timeout=15.0,
+                        )
+                        self.current_suggestion = suggestion
+                        self._judged_text = result
+                    except Exception as e:
+                        suggestion = None
+                        print(f"  (AIエラー: {self._short(e)})", file=sys.stderr)
+
+            # ファイルへ記録（入力 + サジェスト）
+            append_entry(self.session_path, text, suggestion)
+
             print_formatted_text(FormattedText([
                 ("class:prompt", "  送信: "),
                 ("", result),
@@ -289,9 +333,10 @@ class TypoSuggest:
             ]))
             # 次の入力に向けてリセット
             self.current_suggestion = None
+            self._judged_text = None
             self.status = "入力してください（1秒で判定します）"
 
-        print("終了します。")
+        print(f"終了します。セッションログ: {self.session_path}")
 
 
 # ----------------------------------------------------------------------
@@ -306,16 +351,18 @@ def main() -> None:
     p.add_argument("--model", default=None, help="LMStudio のモデルID（省略時は起動時に一覧から選択）")
     p.add_argument("--base-url", default=DEFAULT_BASE_URL, help="LMStudio の API URL")
     p.add_argument("--debounce", type=float, default=DEFAULT_DEBOUNCE, help="無入力判定までの秒数")
+    p.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="セッションログの出力ディレクトリ")
     p.add_argument("--check", action="store_true", help="起動診断のみ行い終了")
     p.add_argument("--once", metavar="INPUT", help="1回だけ判定して終了（非対話）")
     args = p.parse_args()
 
     # --- 語彙読込 -------------------------------------------------------
+    words_path = data_path(args.words)
     try:
-        words = load_words(args.words)
+        words = load_words(words_path)
     except FileNotFoundError:
-        print(f"エラー: 語彙ファイルが見つかりません: {args.words}", file=sys.stderr)
-        print("先に `python extract_words.py N` を実行して tmp.txt を作成してください。", file=sys.stderr)
+        print(f"エラー: 語彙ファイルが見つかりません: {words_path}", file=sys.stderr)
+        print("先に `python extract_words.py N` を実行して input/tmp.txt を作成してください。", file=sys.stderr)
         sys.exit(1)
     char_count = sum(len(w) for w in words)
     print(f"語彙ファイル: {args.words}（{len(words)} 語 / {char_count} 文字を読み込み）")

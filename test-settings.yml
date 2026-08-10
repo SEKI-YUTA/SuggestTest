@@ -1,0 +1,8 @@
+# 自動テスト設定 (run_test.py が読み込みます)
+# 必須項目:
+model: gemma-2-2b-it                  # テストに使用するモデル名
+input_file: input/test-inputs.txt     # 1行1単語の入力ファイルパス
+# 任意項目（省略時は既定値を使用）:
+words_file: input/tmp.txt             # 語彙ファイル
+base_url: http://localhost:1234/v1
+output_dir: output
